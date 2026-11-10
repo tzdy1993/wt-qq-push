@@ -279,7 +279,7 @@ def run_once(dry_run: bool = False, init: bool = False, pages: int = 2) -> int:
             if MODE in ("markdown", "both"):
                 label = {
                     "changelog": "📖 查看更新日志",
-                    "forum": "📖 查看论坛原帖",
+                    "forum": "📖 查看原文",
                 }.get(item.kind, "📖 阅读全文")
                 # 封面先转存到 QQ 素材库再引用，避免平台拉外链失败导致裂图
                 md_img: str | None = None
