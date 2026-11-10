@@ -122,11 +122,21 @@ def find_new_forum(
     论坛里那 20 多条「2.59.0.92 更新」会全部当成新内容推一遍。
     """
     known_set = {str(k) for k in known}
+    # 和新闻/更新日志一样按编号兜底：比已知最大 f: 编号小的判为历史积压，
+    # 这样翻更多页、或 state 出问题时都不会把一堆旧帖翻出来。
+    forum_max = max([int(k[2:]) for k in known_set if k.startswith("f:")] or [0])
+
     fresh: list[NewsItem] = []
     mirrored: list[str] = []
     for t in fetch_official_topics(pages=pages, session=session):
         if t.key in known_set:
             continue
+        try:
+            if int(t.id) <= forum_max:
+                print(f"[skip] 论坛 {t.id} 不晚于已知最新 {forum_max}，判为历史积压")
+                continue
+        except ValueError:
+            pass
         if is_duplicate(t.title, dedupe_titles):
             mirrored.append(t.key)
             continue

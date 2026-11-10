@@ -50,6 +50,10 @@ BURST_MAX_ITEMS = int(os.environ.get("QQ_BURST_MAX_ITEMS", "20"))
 FORUM_ENABLED = os.environ.get("QQ_FORUM", "1").lower() not in ("0", "false", "no")
 FORUM_PAGES = int(os.environ.get("QQ_FORUM_PAGES", "3"))
 
+# 最后一道保险：单次运行最多推这么多条。超出说明不正常（state 丢了、或长期停摆
+# 后积压），此时只推最新的几条，其余静默标记已读，绝不把群刷爆。
+MAX_PUSH_PER_RUN = int(os.environ.get("QQ_MAX_PUSH_PER_RUN", "5"))
+
 # 时间过滤默认**禁用**（0）。
 # 原因：官网页面的日期只精确到「天」，算出来的 age_hours 自带 ±24 小时误差，
 # 拿它判断「是不是最近发的」会误杀刚发布的新闻。防重复/防积压靠编号过滤
@@ -212,6 +216,18 @@ def run_once(dry_run: bool = False, init: bool = False, pages: int = 2) -> int:
         if not items:
             print(f"本次没有 {MAX_AGE_HOURS:.0f} 小时内的新内容，已把 {len(stale)} 条旧内容标记为已读")
             return 0
+
+    # 最后一道保险：items 此时是「最新在前」的页面顺序，保留最新的 N 条
+    if len(items) > MAX_PUSH_PER_RUN:
+        overflow = items[MAX_PUSH_PER_RUN:]
+        print(f"[cap] 本次发现 {len(items)} 条，超过单次上限 {MAX_PUSH_PER_RUN}，"
+              f"只推最新 {MAX_PUSH_PER_RUN} 条，其余 {len(overflow)} 条标记已读")
+        for i in overflow:
+            state["pushed"].append(i.key)
+            print(f"[cap-skip] {i.key} {i.title[:40]}")
+        items = items[:MAX_PUSH_PER_RUN]
+        if not dry_run:
+            save_state(state)
 
     # 官网顺序是最新在前，倒着发，让群里最后一条是最新的
     items.reverse()
