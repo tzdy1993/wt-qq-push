@@ -26,6 +26,8 @@ ROOT = Path(__file__).resolve().parent
 STATE_FILE = ROOT / "state.json"
 SEND_GAP = 5.0        # 两条消息之间的间隔，别把群刷了
 SUMMARY_LIMIT = 150   # 摘要截断长度
+IMG_GAP = 1.0         # 图片和紧跟的文字之间
+SEND_IMAGE = os.environ.get("QQ_SEND_IMAGE", "1").lower() not in ("0", "false", "no")
 
 
 def _load_env(path: Path = ROOT / ".env") -> None:
@@ -109,6 +111,14 @@ def run_once(dry_run: bool = False, init: bool = False, pages: int = 1) -> int:
             continue
         try:
             assert bot is not None
+            # 先发封面图，再发文字。图片失败不影响文字，降级继续
+            if SEND_IMAGE and item.image:
+                try:
+                    bot.send_group_image_url(item.image)
+                    print(f"[img] {item.id} {item.image[:70]}")
+                    time.sleep(IMG_GAP)
+                except QQBotError as e:
+                    print(f"[img-skip] {item.id} 图片没发出去: {e}", file=sys.stderr)
             bot.send_group_text(text)
             sent += 1
             print(f"[ok] {item.id} {item.title}")

@@ -110,6 +110,43 @@ class QQBot:
             group_openid=group_openid,
         )
 
+    # ---------------- 富媒体（图片） ----------------
+    def upload_group_image(self, url: str, group_openid: str | None = None) -> str:
+        """用公网 URL 直传图片，返回 file_info。
+
+        省掉下载/分片，平台自己去拉这个 URL。file_info 有 ttl，拿到就立刻发。
+        """
+        gid = group_openid or self.group_openid
+        if not gid:
+            raise ValueError("缺少 group_openid")
+        r = requests.post(
+            f"{self.base}/v2/groups/{gid}/files",
+            headers=self._headers(),
+            json={"file_type": 1, "url": url},   # file_type=1 图片
+            timeout=60,
+        )
+        try:
+            data = r.json()
+        except Exception:  # noqa: BLE001
+            data = {"raw": r.text}
+        fi = data.get("file_info")
+        if not fi:
+            raise QQBotError(data.get("code"), data.get("message", r.text[:200]), data)
+        return fi
+
+    def send_group_image(self, file_info: str, group_openid: str | None = None) -> dict:
+        """msg_type=7 富媒体。content 必须给个占位值，但不展示。"""
+        return self.send_group(
+            {"msg_type": 7, "content": " ", "media": {"file_info": file_info}},
+            group_openid=group_openid,
+        )
+
+    def send_group_image_url(self, url: str, group_openid: str | None = None) -> dict:
+        """上传 + 发送一步到位。"""
+        return self.send_group_image(
+            self.upload_group_image(url, group_openid), group_openid
+        )
+
     def whoami(self) -> dict:
         r = requests.get(f"{self.base}/users/@me", headers=self._headers(), timeout=20)
         return r.json()
