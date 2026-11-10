@@ -1,0 +1,9 @@
+# 凭证，绝不提交
+.env
+.token_cache
+
+# Python
+__pycache__/
+*.pyc
+
+# 注意：state.json 必须提交，GitHub Actions 靠它去重

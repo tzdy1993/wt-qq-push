@@ -1,0 +1,47 @@
+name: WT News → QQ
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"      # 每 15 分钟。GitHub 免费版 cron 会有几分钟延迟，正常
+  workflow_dispatch:             # 允许手动触发
+
+permissions:
+  contents: write                # 需要提交 state.json 回去
+
+concurrency:
+  group: wt-news-push
+  cancel-in-progress: false      # 防止两次运行叠在一起重复发消息
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Push new news
+        env:
+          QQ_APPID: ${{ secrets.QQ_APPID }}
+          QQ_SECRET: ${{ secrets.QQ_SECRET }}
+          QQ_GROUP_OPENID: ${{ secrets.QQ_GROUP_OPENID }}
+        run: python main.py
+
+      - name: Commit state
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain state.json)" ]; then
+            git add state.json
+            git commit -m "chore: update state.json"
+            git push
+          else
+            echo "state.json 无变化"
+          fi
