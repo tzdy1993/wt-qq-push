@@ -1,9 +1,10 @@
-"""战争雷霆官网新闻/开发日志抓取。
+"""战争雷霆官网内容抓取：新闻 + 更新日志。
 
-数据源：https://warthunder.com/zh/news/
-- 列表页只取「新闻编号 + slug」，编号是天然的去重键与排序键
-- 详情页取 og:title / og:image / og:description，一次只抓新增的，开销小
-- 短链 https://warthunder.com/zh/news/<编号> 实测可直接访问（200），OG url 也是它
+两个数据源：
+- 新闻/开发日志   https://warthunder.com/zh/news/      编号如 2878，短链 /zh/news/2878 可直接访问
+- 更新日志        https://warthunder.com/zh/game/changelog/ 编号如 729，必须用完整路径 /current/729
+
+两者编号体系不同，去重 key 用前缀区分：新闻是 "2878"，更新日志是 "cl:729"。
 """
 
 from __future__ import annotations
@@ -17,27 +18,32 @@ import requests
 from bs4 import BeautifulSoup
 
 BASE = "https://warthunder.com"
-LIST_URL = f"{BASE}/zh/news/"
+NEWS_LIST = f"{BASE}/zh/news/"
+CHANGELOG_LIST = f"{BASE}/zh/game/changelog/"
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 HEADERS = {"User-Agent": UA, "Accept-Language": "zh-CN,zh;q=0.9"}
 
+CL_PREFIX = "cl:"
 _NEWS_HREF = re.compile(r"^/zh/news/(\d+)-")
+_CHANGELOG_HREF = re.compile(r"/zh/game/changelog/current/(\d+)")
+_TITLE_TAIL = re.compile(r"\s*-\s*(更新|新闻|News)\s*-\s*游戏?\s*-?\s*War\s*Thun\w*\s*$", re.I)
 
 
 @dataclass
 class NewsItem:
-    id: str          # 官网新闻编号，如 "2878"
+    id: str          # 官网编号
     title: str
-    url: str         # 短链，适合塞进 QQ 消息
-    image: str       # 封面图（可能为空）
-    summary: str     # 首段摘要（可能为空）
+    url: str         # 用于按钮跳转
+    image: str       # 封面图（更新日志为空）
+    summary: str
+    kind: str = "news"   # news | changelog
 
     @property
     def key(self) -> str:
-        return self.id
+        return self.id if self.kind == "news" else f"{CL_PREFIX}{self.id}"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -63,11 +69,23 @@ def _get(s: requests.Session, url: str, retries: int = 3) -> str:
     raise RuntimeError(f"抓取失败 {url}: {last}")
 
 
+def _meta(soup: BeautifulSoup, prop: str) -> str:
+    el = soup.find("meta", attrs={"property": prop}) or soup.find(
+        "meta", attrs={"name": prop}
+    )
+    return (el.get("content") or "").strip() if el else ""
+
+
+def _clean_title(raw: str) -> str:
+    return _TITLE_TAIL.sub("", raw).strip()
+
+
+# ---------------- 新闻 ----------------
 def fetch_list_ids(s: requests.Session, pages: int = 1) -> list[str]:
-    """按页面顺序返回新闻编号，最新在前。"""
+    """新闻列表编号，页面顺序，最新在前。"""
     ids: list[str] = []
     for p in range(1, pages + 1):
-        url = LIST_URL if p == 1 else f"{BASE}/zh/news/page/{p}/"
+        url = NEWS_LIST if p == 1 else f"{BASE}/zh/news/page/{p}/"
         soup = BeautifulSoup(_get(s, url), "lxml")
         for a in soup.select('a[href^="/zh/news/"]'):
             m = _NEWS_HREF.match(a.get("href", ""))
@@ -82,23 +100,13 @@ def fetch_detail(s: requests.Session, news_id: str) -> NewsItem:
     url = f"{BASE}/zh/news/{news_id}"
     soup = BeautifulSoup(_get(s, url), "lxml")
 
-    def meta(prop: str) -> str:
-        el = soup.find("meta", attrs={"property": prop}) or soup.find(
-            "meta", attrs={"name": prop}
-        )
-        return (el.get("content") or "").strip() if el else ""
-
-    title = meta("og:title") or meta("twitter:title")
-    # og:title 带站名尾巴，例如「[开发] H-39：夭折巨兽 新闻-War Thuner」
-    title = re.sub(r"\s*(新闻|News)\s*-\s*War\s*Thun\w*\s*$", "", title, flags=re.I).strip()
-
-    image = meta("og:image") or meta("twitter:image")
+    title = _clean_title(_meta(soup, "og:title") or _meta(soup, "twitter:title"))
+    image = _meta(soup, "og:image") or _meta(soup, "twitter:image")
     if image.startswith("//"):
         image = "https:" + image
-
-    summary = meta("description")
-    # 官网 description 前面是句固定的宣传语，去掉更有信息量
-    summary = re.sub(r"^和您的朋友一起在最拟真的免费游戏中畅玩！\s*", "", summary).strip()
+    summary = re.sub(
+        r"^和您的朋友一起在最拟真的免费游戏中畅玩！\s*", "", _meta(soup, "description")
+    ).strip()
 
     return NewsItem(
         id=news_id,
@@ -106,33 +114,94 @@ def fetch_detail(s: requests.Session, news_id: str) -> NewsItem:
         url=f"{BASE}/zh/news/{news_id}",
         image=image,
         summary=summary,
+        kind="news",
     )
 
 
+# ---------------- 更新日志 ----------------
+def fetch_changelog_ids(s: requests.Session, pages: int = 1) -> list[str]:
+    """更新日志编号。列表页每条有多个链接指向同一 id，需要去重。"""
+    ids: list[str] = []
+    for p in range(1, pages + 1):
+        url = CHANGELOG_LIST if p == 1 else f"{BASE}/zh/game/changelog/page/{p}/"
+        soup = BeautifulSoup(_get(s, url), "lxml")
+        for a in soup.select('a[href*="/game/changelog/current/"]'):
+            m = _CHANGELOG_HREF.search(a.get("href", ""))
+            if m and m.group(1) not in ids:
+                ids.append(m.group(1))
+        if not ids:
+            break
+    return ids
+
+
+def fetch_changelog_detail(s: requests.Session, cid: str, summary_len: int = 160) -> NewsItem:
+    """更新日志没有专属封面图（og:image 是站点默认图），摘要从 .article 正文抠。"""
+    url = f"{BASE}/zh/game/changelog/current/{cid}"
+    soup = BeautifulSoup(_get(s, url), "lxml")
+
+    title = _clean_title(_meta(soup, "og:title")) or f"更新日志 #{cid}"
+
+    body = soup.select_one(".article")
+    if body:
+        # 正文是改动条目清单，换行压成空格，取开头一段
+        summary = re.sub(r"\s+", " ", body.get_text(" ", strip=True)).strip()
+        if len(summary) > summary_len:
+            summary = summary[:summary_len].rstrip() + "…"
+    else:
+        summary = ""
+
+    return NewsItem(
+        id=cid,
+        title=title,
+        url=url,
+        image="",          # 不拿默认图冒充封面
+        summary=summary,
+        kind="changelog",
+    )
+
+
+# ---------------- 汇总 ----------------
 def find_new(
-    s: requests.Session | None = None, known: Iterable[str] = (), pages: int = 1
+    s: requests.Session | None = None,
+    known: Iterable[str] = (),
+    pages: int = 1,
+    include_changelog: bool = True,
 ) -> list[NewsItem]:
-    """返回 known 里没有的新条目（按官网顺序，最新在前）。"""
+    """返回 known 里没有的新条目。新闻在前，更新日志在后。"""
     s = s or _session()
     known_set = {str(k) for k in known}
-    fresh_ids = [i for i in fetch_list_ids(s, pages=pages) if i not in known_set]
     out: list[NewsItem] = []
-    for nid in fresh_ids:
+
+    for nid in fetch_list_ids(s, pages=pages):
+        if nid in known_set:
+            continue
         try:
             out.append(fetch_detail(s, nid))
         except Exception as e:  # noqa: BLE001
-            print(f"[warn] 详情抓取失败 {nid}: {e}")
+            print(f"[warn] 新闻详情抓取失败 {nid}: {e}")
+
+    if include_changelog:
+        for cid in fetch_changelog_ids(s, pages=pages):
+            if f"{CL_PREFIX}{cid}" in known_set:
+                continue
+            try:
+                out.append(fetch_changelog_detail(s, cid))
+            except Exception as e:  # noqa: BLE001
+                print(f"[warn] 更新日志抓取失败 {cid}: {e}")
+
     return out
 
 
 if __name__ == "__main__":
     sess = _session()
-    print("列表编号:", fetch_list_ids(sess)[:8])
-    items = find_new(sess, known=[])
-    for it in items[:5]:
+    print("新闻编号:", fetch_list_ids(sess)[:6])
+    print("更新日志编号:", fetch_changelog_ids(sess)[:6])
+    print()
+    for it in find_new(sess, known=[]):
+        if it.kind != "changelog":
+            continue
         print("-" * 60)
-        print("编号:", it.id)
+        print("key:", it.key)
         print("标题:", it.title)
         print("链接:", it.url)
-        print("封面:", it.image[:90])
-        print("摘要:", it.summary[:100])
+        print("摘要:", it.summary[:120])

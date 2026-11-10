@@ -290,19 +290,17 @@ class QQBot:
             group_openid=group_openid,
         )
 
-    def send_group_news(self, markdown_text: str, url: str,
+    def send_group_news(self, markdown_text: str, url: str, label: str = "📖 阅读全文",
                         group_openid: str | None = None) -> dict:
-        """一条 markdown 消息 + 底部「阅读全文」按钮。目前 QQ 群能同时满足
-        「单条消息 / 文字排版 / 链接可点」的唯一形态。
-
-        markdown 内嵌图片(![]())实测不渲染，所以图进不来这条消息。
+        """一条 markdown 消息 + 底部跳转按钮。目前 QQ 群能同时满足
+        「单条消息 / 图文排版 / 链接可点」的唯一形态。
         """
         return self.send_group(
             {
                 "msg_type": 2,
                 "content": " ",
                 "markdown": {"content": markdown_text},
-                "keyboard": link_button("📖 阅读全文", url),
+                "keyboard": link_button(label, url),
             },
             group_openid=group_openid,
         )

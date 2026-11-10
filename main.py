@@ -126,9 +126,9 @@ def run_once(dry_run: bool = False, init: bool = False, pages: int = 1) -> int:
     items.reverse()
 
     if init:
-        state["pushed"].extend(i.id for i in items)
+        state["pushed"].extend(i.key for i in items)
         for i in items:
-            print(f"[init] 记为已推送 {i.id} {i.title}")
+            print(f"[init] 记为已推送 {i.key} {i.title}")
         save_state(state)
         return 0
 
@@ -153,11 +153,12 @@ def run_once(dry_run: bool = False, init: bool = False, pages: int = 1) -> int:
                 except QQBotError as e:
                     print(f"[img-skip] {item.id} 图片没发出去: {e}", file=sys.stderr)
             if MODE in ("markdown", "both"):
-                bot.send_group_news(render_markdown(item), item.url)
+                label = "📖 查看更新日志" if item.kind == "changelog" else "📖 阅读全文"
+                bot.send_group_news(render_markdown(item), item.url, label=label)
             else:
                 bot.send_group_text(render(item))
             sent += 1
-            print(f"[ok] {item.id} {item.title}")
+            print(f"[ok] {item.key} {item.title}")
         except QQBotError as e:
             print(f"[fail] {item.id} {item.title} -> {e}", file=sys.stderr)
             # 权限/凭证类的错误重试也没用，直接停下等修
@@ -165,7 +166,7 @@ def run_once(dry_run: bool = False, init: bool = False, pages: int = 1) -> int:
                 save_state(state)
                 return 1
             continue
-        state["pushed"].append(item.id)
+        state["pushed"].append(item.key)
         save_state(state)
         if idx != len(items) - 1:
             time.sleep(SEND_GAP)
