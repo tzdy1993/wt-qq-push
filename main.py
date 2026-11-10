@@ -184,7 +184,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="只打印不发送")
     ap.add_argument("--init", action="store_true", help="把现有新闻全部标记为已推送")
-    ap.add_argument("--pages", type=int, default=1, help="列表抓取页数")
+    ap.add_argument("--pages", type=int, default=2,
+                    help="每个源抓取页数，默认 2 页（新闻 36 条 / 更新日志 24 条），"
+                         "防 Actions 停摆后恢复时漏中间的内容")
     ap.add_argument("--loop", type=int, default=0, help="常驻轮询间隔秒数")
     args = ap.parse_args()
 

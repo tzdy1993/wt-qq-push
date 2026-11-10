@@ -82,16 +82,24 @@ def _clean_title(raw: str) -> str:
 
 # ---------------- 新闻 ----------------
 def fetch_list_ids(s: requests.Session, pages: int = 1) -> list[str]:
-    """新闻列表编号，页面顺序，最新在前。"""
+    """新闻列表编号，页面顺序，最新在前。
+
+    单页抓取失败只告警不中断；某页没有新增编号说明已翻到底，提前结束。
+    """
     ids: list[str] = []
     for p in range(1, pages + 1):
         url = NEWS_LIST if p == 1 else f"{BASE}/zh/news/page/{p}/"
-        soup = BeautifulSoup(_get(s, url), "lxml")
+        try:
+            soup = BeautifulSoup(_get(s, url), "lxml")
+        except Exception as e:  # noqa: BLE001
+            print(f"[warn] 新闻第 {p} 页抓取失败: {e}")
+            break
+        before = len(ids)
         for a in soup.select('a[href^="/zh/news/"]'):
             m = _NEWS_HREF.match(a.get("href", ""))
             if m and m.group(1) not in ids:
                 ids.append(m.group(1))
-        if not ids:
+        if len(ids) == before:
             break
     return ids
 
@@ -120,16 +128,24 @@ def fetch_detail(s: requests.Session, news_id: str) -> NewsItem:
 
 # ---------------- 更新日志 ----------------
 def fetch_changelog_ids(s: requests.Session, pages: int = 1) -> list[str]:
-    """更新日志编号。列表页每条有多个链接指向同一 id，需要去重。"""
+    """更新日志编号。列表页每条有多个链接指向同一 id，需要去重。
+
+    每页 12 条，单页失败只告警不中断，某页无新增即结束。
+    """
     ids: list[str] = []
     for p in range(1, pages + 1):
         url = CHANGELOG_LIST if p == 1 else f"{BASE}/zh/game/changelog/page/{p}/"
-        soup = BeautifulSoup(_get(s, url), "lxml")
+        try:
+            soup = BeautifulSoup(_get(s, url), "lxml")
+        except Exception as e:  # noqa: BLE001
+            print(f"[warn] 更新日志第 {p} 页抓取失败: {e}")
+            break
+        before = len(ids)
         for a in soup.select('a[href*="/game/changelog/current/"]'):
             m = _CHANGELOG_HREF.search(a.get("href", ""))
             if m and m.group(1) not in ids:
                 ids.append(m.group(1))
-        if not ids:
+        if len(ids) == before:
             break
     return ids
 
