@@ -54,7 +54,12 @@ class NewsItem:
 
     @property
     def key(self) -> str:
-        return self.id if self.kind == "news" else f"{CL_PREFIX}{self.id}"
+        """去重键。三个源各用一套前缀，互不冲突。"""
+        if self.kind == "news":
+            return self.id                 # 2878
+        if self.kind == "changelog":
+            return f"{CL_PREFIX}{self.id}"  # cl:729
+        return f"f:{self.id}"               # f:363906（论坛）
 
     def to_dict(self) -> dict:
         return asdict(self)

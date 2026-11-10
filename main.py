@@ -20,7 +20,10 @@ import time
 from pathlib import Path
 
 from qqbot import QQBot, QQBotError
-from wtnews import NewsItem, find_new
+from wtnews import (
+    NewsItem, find_new, fetch_news_items, fetch_changelog_items, _session,
+)
+from forum import find_new_forum
 
 ROOT = Path(__file__).resolve().parent
 STATE_FILE = ROOT / "state.json"
@@ -40,6 +43,12 @@ MODE = os.environ.get("QQ_PUSH_MODE", "markdown").lower()
 # 合并会丢掉图和摘要，只剩一行标题，按需启用。
 BURST_THRESHOLD = int(os.environ.get("QQ_BURST_THRESHOLD", "0"))
 BURST_MAX_ITEMS = int(os.environ.get("QQ_BURST_MAX_ITEMS", "20"))
+
+# 论坛源：只认中文区（分类 86）里 National Coordinator(gid=47) 发起的主题。
+# 与官网新闻/更新日志重复的（中文区 94% 是官网内容翻译）通过标题相似度跳过，
+# 剩下的就是官网没有的：分房权重变动、测试服开启、官方爆料、开发进行时等。
+FORUM_ENABLED = os.environ.get("QQ_FORUM", "1").lower() not in ("0", "false", "no")
+FORUM_PAGES = int(os.environ.get("QQ_FORUM_PAGES", "3"))
 
 # 时间过滤默认**禁用**（0）。
 # 原因：官网页面的日期只精确到「天」，算出来的 age_hours 自带 ±24 小时误差，
@@ -127,7 +136,7 @@ def render_markdown(item: NewsItem, image_url: str | None = None) -> str:
         parts.append(f"![封面 #{w}px #{h}px]({img})")
     parts.append(f"## {item.title}")
 
-    if item.kind != "changelog":
+    if item.kind not in ("changelog", "forum"):
         summary = (item.summary or "").strip()
         if summary:
             if len(summary) > 220:
@@ -158,6 +167,30 @@ def run_once(dry_run: bool = False, init: bool = False, pages: int = 2) -> int:
     state = load_state()
     known = state["pushed"]
     items = find_new(known=known, pages=pages)
+
+    # 论坛源：补官网没有的独家内容（分房权重变动、测试服开启、官方爆料等）。
+    # 中文区 94% 是官网内容的翻译，用标题相似度剔掉，只留真正独有的。
+    mirror_keys: list[str] = []
+    if FORUM_ENABLED:
+        try:
+            s = _session()
+            dedupe_titles = [i.title for i in fetch_news_items(s, pages=pages)]
+            dedupe_titles += [i.title for i in fetch_changelog_items(s, pages=pages)]
+            forum_items, mirror_keys = find_new_forum(
+                known=known, dedupe_titles=dedupe_titles,
+                pages=FORUM_PAGES, session=s,
+            )
+            for k in mirror_keys:
+                print(f"[mirror] 论坛 {k} 是官网内容的中文翻译，跳过")
+            if forum_items:
+                print(f"[forum] 论坛独家 {len(forum_items)} 条")
+            items += forum_items
+        except Exception as e:  # noqa: BLE001
+            print(f"[warn] 论坛抓取失败: {e}", file=sys.stderr)
+
+    if mirror_keys and not dry_run and not init:
+        state["pushed"].extend(mirror_keys)
+        save_state(state)
 
     if not items:
         print("没有新消息")
@@ -228,7 +261,10 @@ def run_once(dry_run: bool = False, init: bool = False, pages: int = 2) -> int:
                 except QQBotError as e:
                     print(f"[img-skip] {item.id} 图片没发出去: {e}", file=sys.stderr)
             if MODE in ("markdown", "both"):
-                label = "📖 查看更新日志" if item.kind == "changelog" else "📖 阅读全文"
+                label = {
+                    "changelog": "📖 查看更新日志",
+                    "forum": "📖 查看论坛原帖",
+                }.get(item.kind, "📖 阅读全文")
                 # 封面先转存到 QQ 素材库再引用，避免平台拉外链失败导致裂图
                 md_img: str | None = None
                 if MD_IMAGE and item.image:
