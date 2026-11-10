@@ -36,6 +36,11 @@ SEND_IMAGE = os.environ.get("QQ_SEND_IMAGE", "1").lower() not in ("0", "false", 
 #   markdown  一条 markdown 消息 + 阅读全文按钮（推荐，链接可点）
 #   both      封面图 + markdown 两条
 #   text      纯文本一条，不带按钮
+# 支持多个群：QQ_GROUP_OPENID 用逗号分隔
+GROUP_OPENIDS = [
+    g.strip() for g in os.environ.get("QQ_GROUP_OPENID", "").split(",") if g.strip()
+]
+
 MODE = os.environ.get("QQ_PUSH_MODE", "markdown").lower()
 
 # 批量合并：默认**关闭**（0），每条单独发，保留封面图 + 标题 + 摘要 + 按钮。
@@ -280,12 +285,13 @@ def run_once(dry_run: bool = False, init: bool = False, pages: int = 2) -> int:
                     time.sleep(IMG_GAP)
                 except QQBotError as e:
                     print(f"[img-skip] {item.id} 图片没发出去: {e}", file=sys.stderr)
+            label = {
+                "changelog": "📖 查看更新日志",
+                "forum": "📖 查看原文",
+            }.get(item.kind, "📖 阅读全文")
+
+            # 图片只转存一次，多个群共用同一个 qqbot-media:// 引用
             if MODE in ("markdown", "both"):
-                label = {
-                    "changelog": "📖 查看更新日志",
-                    "forum": "📖 查看原文",
-                }.get(item.kind, "📖 阅读全文")
-                # 封面先转存到 QQ 素材库再引用，避免平台拉外链失败导致裂图
                 md_img: str | None = None
                 if MD_IMAGE and item.image:
                     try:
@@ -295,12 +301,35 @@ def run_once(dry_run: bool = False, init: bool = False, pages: int = 2) -> int:
                         print(f"[img-skip] {item.id} 封面转存失败，本条不带图: {e}",
                               file=sys.stderr)
                         md_img = ""
-                bot.send_group_news(render_markdown(item, image_url=md_img),
-                                    item.url, label=label)
+                payload = render_markdown(item, image_url=md_img)
             else:
-                bot.send_group_text(render(item))
+                payload = render(item)
+
+            targets = GROUP_OPENIDS or bot.group_openids
+            ok_groups: list[str] = []
+            fail_groups: list[str] = []
+            for gid in targets:
+                try:
+                    if MODE in ("markdown", "both"):
+                        bot.send_group_news(payload, item.url, label=label,
+                                            group_openid=gid)
+                    else:
+                        bot.send_group_text(payload, group_openid=gid)
+                    ok_groups.append(gid)
+                except QQBotError as e:
+                    fail_groups.append(gid)
+                    print(f"[fail] {item.key} -> 群 {gid[:10]}…: {e}", file=sys.stderr)
+
+            if not ok_groups:
+                # 一条都没发出去就不记 state，下一轮重试
+                raise QQBotError(None, f"全部 {len(targets)} 个群发送失败")
+
             sent += 1
-            print(f"[ok] {item.key} {item.title}")
+            print(f"[ok] {item.key} {item.title} -> {len(ok_groups)}/{len(targets)} 个群")
+            if fail_groups:
+                print(f"[warn] {item.key} 有 {len(fail_groups)} 个群失败，"
+                      f"这些群本轮收不到这条（修好后可从 state 删掉 {item.key} 重推）",
+                      file=sys.stderr)
         except QQBotError as e:
             print(f"[fail] {item.id} {item.title} -> {e}", file=sys.stderr)
             # 权限/凭证类的错误重试也没用，直接停下等修

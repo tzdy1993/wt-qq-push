@@ -75,7 +75,10 @@ class QQBot:
     ) -> None:
         self.appid = appid or os.environ.get("QQ_APPID", "")
         self.secret = secret or os.environ.get("QQ_SECRET", "")
-        self.group_openid = group_openid or os.environ.get("QQ_GROUP_OPENID", "")
+        # 支持逗号分隔的多个群
+        raw = group_openid or os.environ.get("QQ_GROUP_OPENID", "")
+        self.group_openids = [g.strip() for g in raw.split(",") if g.strip()]
+        self.group_openid = self.group_openids[0] if self.group_openids else ""
         self.base = API_SANDBOX if sandbox else API_PROD
         self._token = ""
         self._expire_at = 0.0
