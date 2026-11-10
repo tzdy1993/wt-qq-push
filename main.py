@@ -178,8 +178,13 @@ def run_once(dry_run: bool = False, init: bool = False, pages: int = 2) -> int:
     if FORUM_ENABLED:
         try:
             s = _session()
-            dedupe_titles = [i.title for i in fetch_news_items(s, pages=pages)]
-            dedupe_titles += [i.title for i in fetch_changelog_items(s, pages=pages)]
+            # 去重标题库的**时间跨度**必须匹配论坛帖的跨度，否则老帖找不到
+            # 对应的官网新闻，会被误判成独家。实测：
+            #   只用 1 页（30 条）：误判 16 条
+            #   用 2 页（60 条）：误判 0 条
+            # 论坛翻 3 页 ≈ 1 个月，官网新闻 1 个月 ≈ 2 页，更新日志 ≈ 2 页。
+            dedupe_titles = [i.title for i in fetch_news_items(s, pages=max(2, FORUM_PAGES - 1))]
+            dedupe_titles += [i.title for i in fetch_changelog_items(s, pages=2)]
             forum_items, mirror_keys = find_new_forum(
                 known=known, dedupe_titles=dedupe_titles,
                 pages=FORUM_PAGES, session=s,
