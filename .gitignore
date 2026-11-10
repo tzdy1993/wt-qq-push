@@ -7,3 +7,6 @@ __pycache__/
 *.pyc
 
 # 注意：state.json 必须提交，GitHub Actions 靠它去重
+
+# 机器人头像素材（本地用，不进仓库）
+avatar/

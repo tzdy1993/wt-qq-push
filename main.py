@@ -41,8 +41,12 @@ MODE = os.environ.get("QQ_PUSH_MODE", "markdown").lower()
 BURST_THRESHOLD = int(os.environ.get("QQ_BURST_THRESHOLD", "0"))
 BURST_MAX_ITEMS = int(os.environ.get("QQ_BURST_MAX_ITEMS", "20"))
 
-# 只发这个时长内发布的新闻；更早的标记已读但不发，防止停摆后补发一堆陈年消息
-MAX_AGE_HOURS = float(os.environ.get("QQ_MAX_AGE_HOURS", "24"))
+# 时间过滤默认**禁用**（0）。
+# 原因：官网页面的日期只精确到「天」，算出来的 age_hours 自带 ±24 小时误差，
+# 拿它判断「是不是最近发的」会误杀刚发布的新闻。防重复/防积压靠编号过滤
+# （见 wtnews.find_new 里的 _max_numeric），那个是精确的。
+# 真要按时间粗筛，设成 168（一周）这种量级才有意义。
+MAX_AGE_HOURS = float(os.environ.get("QQ_MAX_AGE_HOURS", "0"))
 
 
 def _load_env(path: Path = ROOT / ".env") -> None:
@@ -93,8 +97,8 @@ def render(item: NewsItem) -> str:
     return "\n".join(lines)
 
 
-MD_IMG_W = os.environ.get("QQ_MD_IMG_W", "600")
-MD_IMG_H = os.environ.get("QQ_MD_IMG_H", "338")
+MD_IMG_W = os.environ.get("QQ_MD_IMG_W", "520")
+MD_IMG_H = os.environ.get("QQ_MD_IMG_H", "294")
 # 更新日志的列表封面是 378x213 缩略图，按原尺寸显示才不糊
 MD_CL_IMG_W = os.environ.get("QQ_MD_CL_IMG_W", "378")
 MD_CL_IMG_H = os.environ.get("QQ_MD_CL_IMG_H", "213")
@@ -161,12 +165,14 @@ def run_once(dry_run: bool = False, init: bool = False, pages: int = 2) -> int:
             save_state(state)
         return 0
 
-    # 太老的直接标记已读不发。更新日志没有日期字段（age_hours=None），不受此限
-    stale = [i for i in items if i.age_hours is not None and i.age_hours > MAX_AGE_HOURS]
+    # 时间过滤（默认关闭）：只有显式设置 QQ_MAX_AGE_HOURS 才生效
+    stale: list[NewsItem] = []
+    if MAX_AGE_HOURS > 0:
+        stale = [i for i in items if i.age_hours is not None and i.age_hours > MAX_AGE_HOURS]
     if stale:
         for i in stale:
             state["pushed"].append(i.key)
-            print(f"[stale] 跳过 {i.key}《{i.title}》（{i.age_hours:.0f} 小时前发布）")
+            print(f"[stale] 跳过 {i.key}《{i.title}》（约 {i.age_hours:.0f} 小时前，精度±24h）")
         items = [i for i in items if i not in stale]
         if not dry_run:
             save_state(state)
