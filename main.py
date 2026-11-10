@@ -29,6 +29,12 @@ SUMMARY_LIMIT = 150   # 摘要截断长度
 IMG_GAP = 1.0         # 图片和紧跟的文字之间
 SEND_IMAGE = os.environ.get("QQ_SEND_IMAGE", "1").lower() not in ("0", "false", "no")
 
+# push 形态：
+#   markdown  一条 markdown 消息 + 阅读全文按钮（推荐，链接可点）
+#   both      封面图 + markdown 两条
+#   text      纯文本一条，不带按钮
+MODE = os.environ.get("QQ_PUSH_MODE", "markdown").lower()
+
 
 def _load_env(path: Path = ROOT / ".env") -> None:
     """极简 .env 加载，省一个 python-dotenv 依赖。已存在的环境变量优先。"""
@@ -78,6 +84,18 @@ def render(item: NewsItem) -> str:
     return "\n".join(lines)
 
 
+def render_markdown(item: NewsItem) -> str:
+    """一条 markdown 消息的正文。标题用 ## 让客户端渲染成大字加粗。"""
+    parts = [f"## {item.title}"]
+    summary = (item.summary or "").strip()
+    if summary:
+        if len(summary) > 220:
+            summary = summary[:220].rstrip() + "…"
+        parts.append(summary)
+    parts.append(item.url)
+    return "\n\n".join(parts)
+
+
 # ---------------- 主流程 ----------------
 def run_once(dry_run: bool = False, init: bool = False, pages: int = 1) -> int:
     state = load_state()
@@ -103,23 +121,27 @@ def run_once(dry_run: bool = False, init: bool = False, pages: int = 1) -> int:
     bot = None if dry_run else QQBot()
     sent = 0
     for idx, item in enumerate(items):
-        text = render(item)
+        text = render_markdown(item) if MODE in ("markdown", "both") else render(item)
         if dry_run:
             print("-" * 60)
+            print(f"[mode={MODE}]")
             print(text)
             sent += 1
             continue
         try:
             assert bot is not None
-            # 先发封面图，再发文字。图片失败不影响文字，降级继续
-            if SEND_IMAGE and item.image:
+            # both 模式先补一张封面图，失败就跳过，不影响主消息
+            if MODE == "both" and item.image:
                 try:
                     bot.send_group_image_url(item.image)
                     print(f"[img] {item.id} {item.image[:70]}")
                     time.sleep(IMG_GAP)
                 except QQBotError as e:
                     print(f"[img-skip] {item.id} 图片没发出去: {e}", file=sys.stderr)
-            bot.send_group_text(text)
+            if MODE in ("markdown", "both"):
+                bot.send_group_news(render_markdown(item), item.url)
+            else:
+                bot.send_group_text(render(item))
             sent += 1
             print(f"[ok] {item.id} {item.title}")
         except QQBotError as e:

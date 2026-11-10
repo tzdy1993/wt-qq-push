@@ -6,22 +6,28 @@
 
 ## 它长什么样
 
-每条新闻发两条：封面图 + 文字。
+一条消息，带一个可点的按钮：
 
 ```
-[图片] 官网封面（940x530）
-
-【战争雷霆】[开发] H-39：夭折巨兽
+【开发】H-39：夭折巨兽          ← markdown 标题，客户端渲染成加粗大字
 
 德国远洋海军科技树全新顶级战舰——现实中未能完工的 H 级战列舰
-(1939 年规划方案) 即将在新版本"鹰之暗影"中加入游戏！
+(1939 年规划方案) 即将在新版本"鹰之暗影"中加入游戏!
 
-https://warthunder.com/zh/news/2878
+https://warthunder.com/zh/news/2878   ← 蓝色可点
+
+[  📖 阅读全文  ]  ← 可点按钮，直接跳官网
 ```
 
-图片走 `msg_type=7` 富媒体，用官网封面图的公网 URL 直传（`/v2/groups/{openid}/files` 带 `file_type=1`），不用下载、不用分片、不用本地渲染。文字走 `msg_type=0`。
+用 `msg_type=2` markdown + `keyboard` 跳转按钮。
 
-设 `QQ_SEND_IMAGE=0` 可关掉图片，只发文字。
+`QQ_PUSH_MODE` 控制形态：
+
+| 值 | 效果 |
+|---|---|
+| `markdown`（默认） | 一条 markdown + 按钮，链接可点 |
+| `both` | 封面图 + markdown，两条，更热闹但刷屏 |
+| `text` | 纯文本一条，不带按钮 |
 
 ## 文件
 
@@ -69,8 +75,7 @@ $env:QQ_GROUP_OPENID="..."
 3. `Settings → Actions → General → Workflow permissions` 选 **Read and write permissions**（要提交 `state.json` 回去）
 4. 先手动跑一次 `WT News → QQ`（`workflow_dispatch`）验证，之后每 15 分钟自动跑
 
-> 私有仓库每月 2000 Actions 分钟。15 分钟一轮、每轮约 30 秒，月耗约 1440 分钟，够用。
-> 想更省就把 cron 改成 `*/20` 或 `*/30`。
+> 私有仓库每月 2000 Actions 分钟。30 分钟一轮、每轮约 50 秒，月耗约 1200 分钟，够用。
 
 ## 首次接入 checklist
 
@@ -90,6 +95,9 @@ $env:QQ_GROUP_OPENID="..."
 | `40034105 主动消息失败, 无权限` | 群主没开「允许主动推送消息」 |
 | 中文抓出来是乱码 | 官网是 UTF-8，`requests` 自动猜会猜错，必须 `r.encoding = "utf-8"` |
 | 首次上线刷屏 | 忘了跑 `--init` |
+| `msg_type=0` 或 `7` 带 `keyboard` 没反应 | 按钮只能挂在 **markdown 消息**上，纯文本和图片消息的 keyboard 会被客户端忽略 |
+| markdown 里 `![](url)` 图片不显示 | QQ 群 markdown 不允许外链图片，只留一片空白 |
+| 表格、代码块这类 markdown 不渲染 | QQ 群只认标题/加粗这类基础语法 |
 
 ## 已知限制
 
@@ -98,11 +106,22 @@ $env:QQ_GROUP_OPENID="..."
 - 链接实测**不需要**配 URL 白名单就可以直接发（`warthunder.com`）
 - 官网改版会让 `.widget` / `og:` 这类选择器失效，`wtnews.py` 里集中改一处即可
 
-## 为什么不用 markdown
+## 为什么是「markdown + 按钮」
 
-`msg_type=2` 在文档里标着群聊可用，但 **QQ 群客户端不渲染 markdown**，发出去要么是原始文本要么干脆不显示。所以图文卡片走的是「封面图（`msg_type=7`）+ 文字（`msg_type=0`）」两条消息的组合。
+试过的所有组合，实测结果：
 
-封面图直接用官网 `og:image`，尺寸 940x530，在手机 QQ 里显示效果正好。
+| 组合 | 文字排版 | 按钮 | 图片 |
+|---|---|---|---|
+| `msg_type=0` 纯文本 | ✅ | ❌ | ❌ |
+| `msg_type=2` markdown | ✅ | ✅ | ❌（`![]()` 不渲染） |
+| `msg_type=7` 图片 | ❌（`content` 被忽略） | ❌ | ✅ |
+| 结构化卡片 Ark | — | — | —（群聊「发 ❌」，只能收） |
+
+结论：**「一条消息 + 文字 + 可点链接」只有 markdown + keyboard 这一种组合能做到**，代价是塞不进图片。
+
+想同时要图就用 `QQ_PUSH_MODE=both` 发两条（封面图 + markdown），代价是刷屏。
+
+`card.py` 里的卡片渲染（把文字画进图）也留着，那是唯一能做到「图文一体」的路子，但图上链接点不了——只适合不在意点击的场景。
 
 ## 消息条数预算
 
