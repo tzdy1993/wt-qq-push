@@ -2,7 +2,7 @@ name: WT News → QQ
 
 on:
   schedule:
-    - cron: "*/15 * * * *"      # 每 15 分钟。GitHub 免费版 cron 会有几分钟延迟，正常
+    - cron: "*/30 * * * *"      # 每 30 分钟。私有仓库每月 2000 Actions 分钟，这个频率约 1200 分钟/月
   workflow_dispatch:             # 允许手动触发
 
 permissions:
