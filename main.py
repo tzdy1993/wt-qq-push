@@ -97,16 +97,20 @@ def render_markdown(item: NewsItem) -> str:
     - 图片放最前面，观感比夹在标题和正文之间好
     - 标题用 ##，客户端渲染成大字加粗
     - 链接靠底部按钮，正文里不再重复放裸 URL
+    - 更新日志只发标题，正文是条目清单，截在半句上反而难看
     """
     parts: list[str] = []
     if MD_IMAGE and item.image:
         parts.append(f"![封面 #{MD_IMG_W}px #{MD_IMG_H}px]({item.image})")
     parts.append(f"## {item.title}")
-    summary = (item.summary or "").strip()
-    if summary:
-        if len(summary) > 220:
-            summary = summary[:220].rstrip() + "…"
-        parts.append(summary)
+
+    if item.kind != "changelog":
+        summary = (item.summary or "").strip()
+        if summary:
+            if len(summary) > 220:
+                summary = summary[:220].rstrip() + "…"
+            parts.append(summary)
+
     return "\n\n".join(parts)
 
 
