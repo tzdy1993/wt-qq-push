@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass, asdict
+from datetime import datetime, timezone
 from typing import Iterable
 
 import requests
@@ -29,7 +30,11 @@ HEADERS = {"User-Agent": UA, "Accept-Language": "zh-CN,zh;q=0.9"}
 CL_PREFIX = "cl:"
 _NEWS_HREF = re.compile(r"^/zh/news/(\d+)-")
 _CHANGELOG_HREF = re.compile(r"/zh/game/changelog/current/(\d+)")
-_TITLE_TAIL = re.compile(r"\s*-\s*(更新|新闻|News)\s*-\s*游戏?\s*-?\s*War\s*Thun\w*\s*$", re.I)
+# 新闻 og:title 尾巴形如「 新闻-War Thuner」，更新日志形如「 -  更新-游戏-War Thunder」
+# 注意官网把 Thunder 拼成了 Thuner，用 \w* 兜住
+_TITLE_TAIL = re.compile(
+    r"\s*(?:-\s*)?(?:更新|新闻|News)\s*(?:-\s*游戏)?\s*-\s*War\s*Thun\w*\s*$", re.I
+)
 
 
 @dataclass
@@ -40,6 +45,7 @@ class NewsItem:
     image: str       # 封面图（更新日志为空）
     summary: str
     kind: str = "news"   # news | changelog
+    age_hours: float | None = None   # 距抓取时的发布时间（小时）；更新日志无日期字段，为 None
 
     @property
     def key(self) -> str:
@@ -80,6 +86,52 @@ def _clean_title(raw: str) -> str:
     return _TITLE_TAIL.sub("", raw).strip()
 
 
+_AGE_PATTERNS = [
+    (r"刚刚|(\d+)\s*秒", 1 / 3600),      # 刚刚 / X 秒以前
+    (r"(\d+)\s*分钟", 1 / 60),
+    (r"(\d+)\s*小时", 1),
+    (r"(\d+)\s*天", 24),
+    (r"(\d+)\s*周", 24 * 7),
+    (r"(\d+)\s*个月", 24 * 30),
+    (r"(\d+)\s*年", 24 * 365),
+]
+
+
+def parse_age_hours(text: str) -> float | None:
+    """把官网的相对时间（'7 小时以前'、'刚刚'、'2 天以前'）换算成小时数。"""
+    text = (text or "").strip()
+    if not text:
+        return None
+    if "刚刚" in text:
+        return 0.0
+    for pat, unit in _AGE_PATTERNS:
+        m = re.search(pat, text)
+        if m:
+            if m.group(1) is None:      # 「刚刚」这类无数字的
+                return 0.0
+            return int(m.group(1)) * unit
+    return None
+
+
+def _max_numeric(known: set[str], prefix: str = "") -> int:
+    """known 里同一编号体系的最大值。新闻传 prefix=''，更新日志传 'cl:'。"""
+    nums: list[int] = []
+    for k in known:
+        if prefix:
+            if not k.startswith(prefix):
+                continue
+            tail = k[len(prefix):]
+        else:
+            if k.startswith(CL_PREFIX):
+                continue
+            tail = k
+        try:
+            nums.append(int(tail))
+        except ValueError:
+            continue
+    return max(nums) if nums else 0
+
+
 # ---------------- 新闻 ----------------
 def fetch_list_ids(s: requests.Session, pages: int = 1) -> list[str]:
     """新闻列表编号，页面顺序，最新在前。
@@ -116,6 +168,9 @@ def fetch_detail(s: requests.Session, news_id: str) -> NewsItem:
         r"^和您的朋友一起在最拟真的免费游戏中畅玩！\s*", "", _meta(soup, "description")
     ).strip()
 
+    date_el = soup.select_one(".date")
+    age = parse_age_hours(date_el.get_text(strip=True)) if date_el else None
+
     return NewsItem(
         id=news_id,
         title=title or f"战争雷霆新闻 #{news_id}",
@@ -123,16 +178,30 @@ def fetch_detail(s: requests.Session, news_id: str) -> NewsItem:
         image=image,
         summary=summary,
         kind="news",
+        age_hours=age,
     )
 
 
 # ---------------- 更新日志 ----------------
-def fetch_changelog_ids(s: requests.Session, pages: int = 1) -> list[str]:
-    """更新日志编号。列表页每条有多个链接指向同一 id，需要去重。
+def parse_abs_date(text: str) -> datetime | None:
+    """'2026 年 9 月 16 日' -> datetime。"""
+    m = re.search(r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日", text or "")
+    if not m:
+        return None
+    try:
+        return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=None)
+    except ValueError:
+        return None
 
-    每页 12 条，单页失败只告警不中断，某页无新增即结束。
+
+def fetch_changelog_items(s: requests.Session, pages: int = 1) -> list["NewsItem"]:
+    """从列表页直接解析更新日志：标题 / 摘要 / 封面 / 日期全在卡片里。
+
+    不用再逐个访问详情页，省一轮请求，而且列表页才有专属封面和日期
+    （详情页 og:image 是站点默认图，也没有日期字段）。
     """
-    ids: list[str] = []
+    items: list[NewsItem] = []
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     for p in range(1, pages + 1):
         url = CHANGELOG_LIST if p == 1 else f"{BASE}/zh/game/changelog/page/{p}/"
         try:
@@ -140,14 +209,51 @@ def fetch_changelog_ids(s: requests.Session, pages: int = 1) -> list[str]:
         except Exception as e:  # noqa: BLE001
             print(f"[warn] 更新日志第 {p} 页抓取失败: {e}")
             break
-        before = len(ids)
-        for a in soup.select('a[href*="/game/changelog/current/"]'):
+        before = len(items)
+        for card in soup.select(".widget"):
+            a = card.select_one('a[href*="/game/changelog/current/"]')
+            if not a:
+                continue
             m = _CHANGELOG_HREF.search(a.get("href", ""))
-            if m and m.group(1) not in ids:
-                ids.append(m.group(1))
-        if len(ids) == before:
+            if not m:
+                continue
+            cid = m.group(1)
+            if any(i.id == cid for i in items):
+                continue
+
+            title_el = card.select_one(".widget__title")
+            title = re.sub(r"\s+", " ", title_el.get_text(" ", strip=True)) if title_el else ""
+            comment_el = card.select_one(".widget__comment")
+            comment = re.sub(r"\s+", " ", comment_el.get_text(" ", strip=True)) if comment_el else ""
+
+            img_el = card.select_one("img")
+            image = ""
+            if img_el:
+                image = img_el.get("data-src") or img_el.get("src") or ""
+                if image.startswith("//"):
+                    image = "https:" + image
+
+            date_el = card.select_one(".widget-meta__item--right") or card.select_one(".widget__meta li")
+            age_hours = None
+            if date_el:
+                dt = parse_abs_date(date_el.get_text(strip=True))
+                if dt:
+                    age_hours = max(0.0, (now - dt).total_seconds() / 3600)
+
+            items.append(
+                NewsItem(
+                    id=cid,
+                    title=title or f"更新日志 #{cid}",
+                    url=f"{BASE}/zh/game/changelog/current/{cid}",
+                    image=image,
+                    summary=comment,
+                    kind="changelog",
+                    age_hours=age_hours,
+                )
+            )
+        if len(items) == before:
             break
-    return ids
+    return items
 
 
 def fetch_changelog_detail(s: requests.Session, cid: str, summary_len: int = 160) -> NewsItem:
@@ -182,14 +288,23 @@ def find_new(
     known: Iterable[str] = (),
     pages: int = 1,
     include_changelog: bool = True,
+    allow_backfill: bool = False,
 ) -> list[NewsItem]:
-    """返回 known 里没有的新条目。新闻在前，更新日志在后。"""
+    """返回 known 里没有的新条目。新闻在前，更新日志在后。
+
+    allow_backfill=False 时，编号小于「已知最大值」的条目会被判为历史积压并跳过，
+    这样翻多页、或者 Actions 停摆很久之后恢复，都不会把一堆旧内容补发进群。
+    """
     s = s or _session()
     known_set = {str(k) for k in known}
     out: list[NewsItem] = []
 
+    news_max = _max_numeric(known_set, "")
     for nid in fetch_list_ids(s, pages=pages):
         if nid in known_set:
+            continue
+        if not allow_backfill and int(nid) <= news_max:
+            print(f"[skip] 新闻 {nid} 不晚于已知最新 {news_max}，判为历史积压")
             continue
         try:
             out.append(fetch_detail(s, nid))
@@ -197,13 +312,14 @@ def find_new(
             print(f"[warn] 新闻详情抓取失败 {nid}: {e}")
 
     if include_changelog:
-        for cid in fetch_changelog_ids(s, pages=pages):
-            if f"{CL_PREFIX}{cid}" in known_set:
+        cl_max = _max_numeric(known_set, CL_PREFIX)
+        for it in fetch_changelog_items(s, pages=pages):
+            if it.key in known_set:
                 continue
-            try:
-                out.append(fetch_changelog_detail(s, cid))
-            except Exception as e:  # noqa: BLE001
-                print(f"[warn] 更新日志抓取失败 {cid}: {e}")
+            if not allow_backfill and int(it.id) <= cl_max:
+                print(f"[skip] 更新日志 {it.id} 不晚于已知最新 {cl_max}，判为历史积压")
+                continue
+            out.append(it)
 
     return out
 
@@ -211,13 +327,11 @@ def find_new(
 if __name__ == "__main__":
     sess = _session()
     print("新闻编号:", fetch_list_ids(sess)[:6])
-    print("更新日志编号:", fetch_changelog_ids(sess)[:6])
     print()
-    for it in find_new(sess, known=[]):
-        if it.kind != "changelog":
-            continue
+    for it in fetch_changelog_items(sess, pages=1)[:5]:
         print("-" * 60)
         print("key:", it.key)
         print("标题:", it.title)
-        print("链接:", it.url)
-        print("摘要:", it.summary[:120])
+        print("日期:", f"{it.age_hours:.0f} 小时前" if it.age_hours is not None else "未知")
+        print("封面:", it.image[:95] or "（无）")
+        print("摘要:", it.summary[:90])

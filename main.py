@@ -35,6 +35,15 @@ SEND_IMAGE = os.environ.get("QQ_SEND_IMAGE", "1").lower() not in ("0", "false", 
 #   text      纯文本一条，不带按钮
 MODE = os.environ.get("QQ_PUSH_MODE", "markdown").lower()
 
+# 批量合并：默认**关闭**（0），每条单独发，保留封面图 + 标题 + 摘要 + 按钮。
+# 只有显式设成 QQ_BURST_THRESHOLD=3 之类才会在超过阈值时合并成一条。
+# 合并会丢掉图和摘要，只剩一行标题，按需启用。
+BURST_THRESHOLD = int(os.environ.get("QQ_BURST_THRESHOLD", "0"))
+BURST_MAX_ITEMS = int(os.environ.get("QQ_BURST_MAX_ITEMS", "20"))
+
+# 只发这个时长内发布的新闻；更早的标记已读但不发，防止停摆后补发一堆陈年消息
+MAX_AGE_HOURS = float(os.environ.get("QQ_MAX_AGE_HOURS", "24"))
+
 
 def _load_env(path: Path = ROOT / ".env") -> None:
     """极简 .env 加载，省一个 python-dotenv 依赖。已存在的环境变量优先。"""
@@ -86,6 +95,9 @@ def render(item: NewsItem) -> str:
 
 MD_IMG_W = os.environ.get("QQ_MD_IMG_W", "600")
 MD_IMG_H = os.environ.get("QQ_MD_IMG_H", "338")
+# 更新日志的列表封面是 378x213 缩略图，按原尺寸显示才不糊
+MD_CL_IMG_W = os.environ.get("QQ_MD_CL_IMG_W", "378")
+MD_CL_IMG_H = os.environ.get("QQ_MD_CL_IMG_H", "213")
 MD_IMAGE = os.environ.get("QQ_MD_IMAGE", "1").lower() not in ("0", "false", "no")
 
 
@@ -101,7 +113,12 @@ def render_markdown(item: NewsItem) -> str:
     """
     parts: list[str] = []
     if MD_IMAGE and item.image:
-        parts.append(f"![封面 #{MD_IMG_W}px #{MD_IMG_H}px]({item.image})")
+        w, h = (
+            (MD_CL_IMG_W, MD_CL_IMG_H)
+            if item.kind == "changelog"
+            else (MD_IMG_W, MD_IMG_H)
+        )
+        parts.append(f"![封面 #{w}px #{h}px]({item.image})")
     parts.append(f"## {item.title}")
 
     if item.kind != "changelog":
@@ -114,8 +131,24 @@ def render_markdown(item: NewsItem) -> str:
     return "\n\n".join(parts)
 
 
+def render_digest(items: list[NewsItem]) -> str:
+    """一次来了多条新内容时合并成一条消息，每条标题各自可点。
+
+    版本更新当天官网常常一次性放出好几条（完整更新日志 + 若干开发日志 +
+    商店活动），逐条发会把群刷爆，所以超过 BURST_THRESHOLD 就合并。
+    """
+    ordered = list(reversed(items))          # 最新的排最前
+    lines = [f"## 📰 战争雷霆 · {len(items)} 条新内容", ""]
+    for it in ordered[:BURST_MAX_ITEMS]:
+        lines.append(f"[{it.title}]({it.url})")
+        lines.append("")
+    if len(items) > BURST_MAX_ITEMS:
+        lines.append(f"…另有 {len(items) - BURST_MAX_ITEMS} 条，请到官网查看")
+    return "\n".join(lines).strip()
+
+
 # ---------------- 主流程 ----------------
-def run_once(dry_run: bool = False, init: bool = False, pages: int = 1) -> int:
+def run_once(dry_run: bool = False, init: bool = False, pages: int = 2) -> int:
     state = load_state()
     known = state["pushed"]
     items = find_new(known=known, pages=pages)
@@ -125,6 +158,19 @@ def run_once(dry_run: bool = False, init: bool = False, pages: int = 1) -> int:
         if init:
             save_state(state)
         return 0
+
+    # 太老的直接标记已读不发。更新日志没有日期字段（age_hours=None），不受此限
+    stale = [i for i in items if i.age_hours is not None and i.age_hours > MAX_AGE_HOURS]
+    if stale:
+        for i in stale:
+            state["pushed"].append(i.key)
+            print(f"[stale] 跳过 {i.key}《{i.title}》（{i.age_hours:.0f} 小时前发布）")
+        items = [i for i in items if i not in stale]
+        if not dry_run:
+            save_state(state)
+        if not items:
+            print(f"本次没有 {MAX_AGE_HOURS:.0f} 小时内的新内容，已把 {len(stale)} 条旧内容标记为已读")
+            return 0
 
     # 官网顺序是最新在前，倒着发，让群里最后一条是最新的
     items.reverse()
@@ -137,6 +183,23 @@ def run_once(dry_run: bool = False, init: bool = False, pages: int = 1) -> int:
         return 0
 
     bot = None if dry_run else QQBot()
+
+    # 批量合并（默认关闭）：BURST_THRESHOLD>0 且新内容超过阈值才启用
+    if BURST_THRESHOLD > 0 and len(items) > BURST_THRESHOLD and MODE in ("markdown", "both"):
+        digest = render_digest(items)
+        if dry_run:
+            print("-" * 60)
+            print(f"[digest] 合并 {len(items)} 条")
+            print(digest)
+        else:
+            assert bot is not None
+            bot.send_group_markdown_text(digest)
+            print(f"[digest] {len(items)} 条新内容合并成 1 条发送")
+            for it in items:
+                state["pushed"].append(it.key)
+            save_state(state)
+        return 0
+
     sent = 0
     for idx, item in enumerate(items):
         text = render_markdown(item) if MODE in ("markdown", "both") else render(item)

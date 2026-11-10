@@ -305,6 +305,14 @@ class QQBot:
             group_openid=group_openid,
         )
 
+    def send_group_markdown_text(self, markdown_text: str,
+                                 group_openid: str | None = None) -> dict:
+        """纯 markdown（不带按钮），用于批量合并消息。"""
+        return self.send_group(
+            {"msg_type": 2, "content": " ", "markdown": {"content": markdown_text}},
+            group_openid=group_openid,
+        )
+
     def whoami(self) -> dict:
         r = requests.get(f"{self.base}/users/@me", headers=self._headers(), timeout=20)
         return r.json()
