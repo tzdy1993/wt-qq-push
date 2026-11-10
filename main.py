@@ -84,15 +84,29 @@ def render(item: NewsItem) -> str:
     return "\n".join(lines)
 
 
+MD_IMG_W = os.environ.get("QQ_MD_IMG_W", "600")
+MD_IMG_H = os.environ.get("QQ_MD_IMG_H", "338")
+MD_IMAGE = os.environ.get("QQ_MD_IMAGE", "1").lower() not in ("0", "false", "no")
+
+
 def render_markdown(item: NewsItem) -> str:
-    """一条 markdown 消息的正文。标题用 ## 让客户端渲染成大字加粗。"""
-    parts = [f"## {item.title}"]
+    """一条 markdown 消息的正文。
+
+    要点（都是实测出来的）：
+    - 图片必须带尺寸 `![alt #600px #338px](url)`，只写 `![]()` 会渲染成空白
+    - 图片放最前面，观感比夹在标题和正文之间好
+    - 标题用 ##，客户端渲染成大字加粗
+    - 链接靠底部按钮，正文里不再重复放裸 URL
+    """
+    parts: list[str] = []
+    if MD_IMAGE and item.image:
+        parts.append(f"![封面 #{MD_IMG_W}px #{MD_IMG_H}px]({item.image})")
+    parts.append(f"## {item.title}")
     summary = (item.summary or "").strip()
     if summary:
         if len(summary) > 220:
             summary = summary[:220].rstrip() + "…"
         parts.append(summary)
-    parts.append(item.url)
     return "\n\n".join(parts)
 
 
