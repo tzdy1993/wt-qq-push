@@ -101,7 +101,7 @@ MD_CL_IMG_H = os.environ.get("QQ_MD_CL_IMG_H", "213")
 MD_IMAGE = os.environ.get("QQ_MD_IMAGE", "1").lower() not in ("0", "false", "no")
 
 
-def render_markdown(item: NewsItem) -> str:
+def render_markdown(item: NewsItem, image_url: str | None = None) -> str:
     """一条 markdown 消息的正文。
 
     要点（都是实测出来的）：
@@ -110,15 +110,17 @@ def render_markdown(item: NewsItem) -> str:
     - 标题用 ##，客户端渲染成大字加粗
     - 链接靠底部按钮，正文里不再重复放裸 URL
     - 更新日志只发标题，正文是条目清单，截在半句上反而难看
+    - image_url 传空字符串表示本条不带图（转存失败时降级）
     """
     parts: list[str] = []
-    if MD_IMAGE and item.image:
+    img = item.image if image_url is None else image_url
+    if MD_IMAGE and img:
         w, h = (
             (MD_CL_IMG_W, MD_CL_IMG_H)
             if item.kind == "changelog"
             else (MD_IMG_W, MD_IMG_H)
         )
-        parts.append(f"![封面 #{w}px #{h}px]({item.image})")
+        parts.append(f"![封面 #{w}px #{h}px]({img})")
     parts.append(f"## {item.title}")
 
     if item.kind != "changelog":
@@ -221,7 +223,18 @@ def run_once(dry_run: bool = False, init: bool = False, pages: int = 2) -> int:
                     print(f"[img-skip] {item.id} 图片没发出去: {e}", file=sys.stderr)
             if MODE in ("markdown", "both"):
                 label = "📖 查看更新日志" if item.kind == "changelog" else "📖 阅读全文"
-                bot.send_group_news(render_markdown(item), item.url, label=label)
+                # 封面先转存到 QQ 素材库再引用，避免平台拉外链失败导致裂图
+                md_img: str | None = None
+                if MD_IMAGE and item.image:
+                    try:
+                        md_img = bot.upload_media_image_from_url(item.image)
+                        print(f"[img-up] {item.id} 封面已转存素材库")
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[img-skip] {item.id} 封面转存失败，本条不带图: {e}",
+                              file=sys.stderr)
+                        md_img = ""
+                bot.send_group_news(render_markdown(item, image_url=md_img),
+                                    item.url, label=label)
             else:
                 bot.send_group_text(render(item))
             sent += 1

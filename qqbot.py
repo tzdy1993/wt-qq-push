@@ -313,6 +313,106 @@ class QQBot:
             group_openid=group_openid,
         )
 
+    def upload_media_image(self, data: bytes, file_name: str,
+                          content_type: str = "image/jpeg") -> str:
+        """把图片预上传到 QQ 素材库，返回 qqbot-media:// 引用。
+
+        相比在 markdown 里直接写公网 URL，这条路径不依赖平台去外网拉取，
+        不会出现「转存失败 -> 裂图」。素材 90 天滑动过期，单机器人上限 100 张。
+        """
+        import hashlib
+
+        md5 = hashlib.md5(data).hexdigest()
+        sha1 = hashlib.sha1(data).hexdigest()
+
+        r = requests.post(
+            f"{self.base}/v2/media-images/prepare",
+            headers=self._headers(),
+            json={
+                "file_name": file_name,
+                "file_size": len(data),
+                "content_type": content_type,
+                "md5": md5,
+                "sha1": sha1,
+            },
+            timeout=30,
+        )
+        prep = r.json()
+        if prep.get("code") == 40035007:          # 素材数量超上限，清理最旧的再试
+            self.purge_media_images(keep=80)
+            r = requests.post(
+                f"{self.base}/v2/media-images/prepare",
+                headers=self._headers(),
+                json={
+                    "file_name": file_name,
+                    "file_size": len(data),
+                    "content_type": content_type,
+                    "md5": md5,
+                    "sha1": sha1,
+                },
+                timeout=30,
+            )
+            prep = r.json()
+        if "upload_id" not in prep:
+            raise QQBotError(prep.get("code"), prep.get("message", r.text[:200]), prep)
+
+        pr = requests.put(
+            prep["presigned_url"],
+            data=data,
+            headers={"Content-Type": content_type},   # 必须与 prepare 声明一致，否则 COS 403
+            timeout=120,
+        )
+        if pr.status_code not in (200, 201):
+            raise QQBotError(None, f"素材 PUT 失败 HTTP {pr.status_code}")
+        etag = (pr.headers.get("ETag") or "").strip('"')
+
+        r = requests.post(
+            f"{self.base}/v2/media-images/complete",
+            headers=self._headers(),
+            json={"upload_id": prep["upload_id"], "md5": etag or md5},
+            timeout=30,
+        )
+        info = r.json()
+        url = info.get("url")
+        if not url:
+            raise QQBotError(info.get("code"), info.get("message", r.text[:200]), info)
+        return url
+
+    def upload_media_image_from_url(self, image_url: str) -> str:
+        """下载公网图片 -> 上传素材库 -> 返回 qqbot-media:// 引用。"""
+        r = requests.get(image_url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        ctype = (r.headers.get("Content-Type") or "image/jpeg").split(";")[0].strip()
+        if ctype not in ("image/jpeg", "image/png", "image/gif", "image/webp"):
+            ctype = "image/jpeg"
+        ext = {"image/jpeg": "jpg", "image/png": "png",
+               "image/gif": "gif", "image/webp": "webp"}[ctype]
+        return self.upload_media_image(r.content, f"cover.{ext}", ctype)
+
+    def list_media_images(self) -> dict:
+        r = requests.get(f"{self.base}/v2/media-images", headers=self._headers(), timeout=20)
+        return r.json()
+
+    def purge_media_images(self, keep: int = 80) -> int:
+        """素材超过上限时删掉最旧的一批，返回删除数量。"""
+        try:
+            data = self.list_media_images()
+        except Exception:  # noqa: BLE001
+            return 0
+        images = sorted(data.get("images") or [], key=lambda x: x.get("created_at") or 0)
+        removed = 0
+        for img in images[: max(0, len(images) - keep)]:
+            try:
+                requests.delete(
+                    f"{self.base}/v2/media-images/{img['image_id']}/delete",
+                    headers=self._headers(),
+                    timeout=20,
+                )
+                removed += 1
+            except Exception:  # noqa: BLE001
+                continue
+        return removed
+
     def whoami(self) -> dict:
         r = requests.get(f"{self.base}/users/@me", headers=self._headers(), timeout=20)
         return r.json()

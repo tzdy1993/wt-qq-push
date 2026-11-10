@@ -102,7 +102,30 @@ $env:QQ_GROUP_OPENID="..."
 | markdown 里 `![](url)` 图片不显示 | QQ 群 markdown 不允许外链图片，只留一片空白 |
 | 表格、代码块这类 markdown 不渲染 | QQ 群只认标题/加粗这类基础语法 |
 
-## 三道防线：不会一股脑补发一堆
+## 为什么图片不会裂
+
+最初的做法是直接在 markdown 里写官网的公网图片地址。**会偶发裂图**——markdown 图片由 QQ 平台去外网下载转存，拉取失败就留一张裂图（实际遇到过：2879 挪威空军那条）。
+
+改成走**素材管理**接口，先把图片存进 QQ 自己的存储，再引用：
+
+```
+POST /v2/media-images/prepare   → upload_id + presigned_url
+PUT  presigned_url              → ETag
+POST /v2/media-images/complete  → qqbot-media://image/v1/<token>
+```
+
+markdown 里写 `![封面 #600px #338px](qqbot-media://image/v1/...)`，发送时平台直接取内部副本，不依赖外网。
+
+| 项目 | 说明 |
+|---|---|
+| 单图上限 | 10MB（官网封面 80~200KB，远低于） |
+| 素材配额 | 单机器人 100 张，快满时自动删最旧的（保留 80） |
+| 有效期 | 90 天滑动过期，被消息引用就顺延 |
+| 转存失败 | 本条降级为纯文字，绝不发裂图 |
+
+代价是每条消息多 4 次请求（下载图 / prepare / PUT / complete），约 2~3 秒。
+
+不要图片：`QQ_MD_IMAGE=0`，两类消息都变纯文字。
 
 官网页面上有日期，但藏在两个不同位置，都抓了：
 
