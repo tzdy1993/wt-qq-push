@@ -1,16 +1,17 @@
-name: WT News → QQ
+name: WT News to QQ
 
 on:
   schedule:
-    - cron: "*/30 * * * *"      # 每 30 分钟。私有仓库每月 2000 Actions 分钟，这个频率约 1200 分钟/月
-  workflow_dispatch:             # 允许手动触发
+    # 每 30 分钟。GitHub 的 cron 用 UTC，这里 :00 和 :30 各触发一次。
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
 
 permissions:
-  contents: write                # 需要提交 state.json 回去
+  contents: write
 
 concurrency:
   group: wt-news-push
-  cancel-in-progress: false      # 防止两次运行叠在一起重复发消息
+  cancel-in-progress: false
 
 jobs:
   push:
