@@ -23,7 +23,12 @@ from wtnews import NewsItem
 FORUM = "https://forum.warthunder.com"
 CATEGORY = "/c/national-communities/86-category/86"
 OFFICIAL_GID = 47          # National Coordinator：中文区官方协调员
-DUP_THRESHOLD = 0.45       # 标题相似度超过这个值，判为官网新闻的翻译
+
+# 标题相似度阈值：>= 这个值就判为「官网内容的论坛副本」而跳过。
+# 实测分布：真正的副本最低 0.70（H 级战列舰 h-39 型 / H-39：夭折巨兽），
+# 论坛独家最高 0.42（计划中的分房权重变动 / 计划中的服务器维护）。
+# 取 0.55 落在空档正中，两头都有 0.13 的余量。
+DUP_THRESHOLD = 0.55
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
