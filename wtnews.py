@@ -218,6 +218,28 @@ def _max_numeric(known: set[str], prefix: str = "") -> int:
     return max(nums) if nums else 0
 
 
+# 距今多少小时内发布的，一律视为「新内容」，不看编号。
+# 官网的编号并非严格递增（实测出现过 2881 → 2884 → 2882 → 2883 的乱序），
+# 单靠「编号小于最大值就是积压」会把后发的条目永久挡掉。
+FRESH_HOURS = 96
+# 没有日期信息时退回编号判断，留这个余量容忍轻微乱序
+BACKFILL_TOLERANCE = 15
+
+
+def _is_backlog(item: "NewsItem", max_id: int) -> bool:
+    """判断某条目是否属于「历史积压」（不该推）。
+
+    优先用发布时间：官网页面的日期虽然只精确到天，但足以区分「这几天发的」
+    和「几个月前发的」。只有拿不到日期时才退回编号比较。
+    """
+    if item.age_hours is not None:
+        return item.age_hours > FRESH_HOURS
+    try:
+        return int(item.id) < max_id - BACKFILL_TOLERANCE
+    except ValueError:
+        return False
+
+
 def find_new(
     s: requests.Session | None = None,
     known: Iterable[str] = (),
@@ -238,8 +260,8 @@ def find_new(
     for it in fetch_news_items(s, pages=pages):
         if it.key in known_set:
             continue
-        if not allow_backfill and int(it.id) <= news_max:
-            print(f"[skip] 新闻 {it.id} 不晚于已知最新 {news_max}，判为历史积压")
+        if not allow_backfill and _is_backlog(it, news_max):
+            print(f"[skip] 新闻 {it.id} 判为历史积压（已知最新 {news_max}）")
             continue
         out.append(it)
 
@@ -248,8 +270,8 @@ def find_new(
         for it in fetch_changelog_items(s, pages=pages):
             if it.key in known_set:
                 continue
-            if not allow_backfill and int(it.id) <= cl_max:
-                print(f"[skip] 更新日志 {it.id} 不晚于已知最新 {cl_max}，判为历史积压")
+            if not allow_backfill and _is_backlog(it, cl_max):
+                print(f"[skip] 更新日志 {it.id} 判为历史积压（已知最新 {cl_max}）")
                 continue
             out.append(it)
 
