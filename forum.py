@@ -127,22 +127,12 @@ def find_new_forum(
     论坛里那 20 多条「2.59.0.92 更新」会全部当成新内容推一遍。
     """
     known_set = {str(k) for k in known}
-    # 论坛主题 id 由 Discourse 严格自增，比官网新闻可靠。但仍留 15 的余量，
-    # 避免极端情况下把刚发的帖子误判成积压（官网新闻就吃过这个亏）。
-    forum_max = max([int(k[2:]) for k in known_set if k.startswith("f:")] or [0])
-    tolerance = 15
 
     fresh: list[NewsItem] = []
     mirrored: list[str] = []
     for t in fetch_official_topics(pages=pages, session=session):
         if t.key in known_set:
             continue
-        try:
-            if int(t.id) < forum_max - tolerance:
-                print(f"[skip] 论坛 {t.id} 判为历史积压（已知最新 {forum_max}）")
-                continue
-        except ValueError:
-            pass
         if is_duplicate(t.title, dedupe_titles):
             mirrored.append(t.key)
             continue

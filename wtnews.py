@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import time
 from dataclasses import dataclass, asdict
@@ -201,6 +202,7 @@ def fetch_changelog_items(s: requests.Session, pages: int = 1) -> list[NewsItem]
 
 
 def _max_numeric(known: set[str], prefix: str = "") -> int:
+    """仅供调试/日志参考。判断新旧不用它，见 find_new。"""
     nums: list[int] = []
     for k in known:
         if prefix:
@@ -218,62 +220,33 @@ def _max_numeric(known: set[str], prefix: str = "") -> int:
     return max(nums) if nums else 0
 
 
-# 距今多少小时内发布的，一律视为「新内容」，不看编号。
-# 官网的编号并非严格递增（实测出现过 2881 → 2884 → 2882 → 2883 的乱序），
-# 单靠「编号小于最大值就是积压」会把后发的条目永久挡掉。
-FRESH_HOURS = 96
-# 没有日期信息时退回编号判断，留这个余量容忍轻微乱序
-BACKFILL_TOLERANCE = 15
-
-
-def _is_backlog(item: "NewsItem", max_id: int) -> bool:
-    """判断某条目是否属于「历史积压」（不该推）。
-
-    优先用发布时间：官网页面的日期虽然只精确到天，但足以区分「这几天发的」
-    和「几个月前发的」。只有拿不到日期时才退回编号比较。
-    """
-    if item.age_hours is not None:
-        return item.age_hours > FRESH_HOURS
-    try:
-        return int(item.id) < max_id - BACKFILL_TOLERANCE
-    except ValueError:
-        return False
-
-
 def find_new(
     s: requests.Session | None = None,
     known: Iterable[str] = (),
     pages: int = 1,
     include_changelog: bool = True,
-    allow_backfill: bool = False,
 ) -> list[NewsItem]:
-    """返回 known 里没有的新条目。新闻在前，更新日志在后。
+    """返回 state 里没有的条目。
 
-    allow_backfill=False 时，编号小于「已知最大值」的条目会被判为历史积压并跳过，
-    这样翻多页、或 Actions 停摆很久之后恢复，都不会把一堆旧内容补发进群。
+    判断规则只有一条：**key 在 state 里就是旧的，不在就是新的。**
+    不做编号大小比较、不看发布时间——官网编号会乱序（实测 2881→2884→2882→2883），
+    任何基于编号顺序的推断都会漏推。
+
+    前提是 state 里已记录了首次部署时页面上可见的全部条目（见 --init），
+    之后只要页数不变，页面上的老条目都已在 state 中，不会重复推送。
     """
     s = s or _session()
     known_set = {str(k) for k in known}
     out: list[NewsItem] = []
 
-    news_max = _max_numeric(known_set, "")
     for it in fetch_news_items(s, pages=pages):
-        if it.key in known_set:
-            continue
-        if not allow_backfill and _is_backlog(it, news_max):
-            print(f"[skip] 新闻 {it.id} 判为历史积压（已知最新 {news_max}）")
-            continue
-        out.append(it)
+        if it.key not in known_set:
+            out.append(it)
 
     if include_changelog:
-        cl_max = _max_numeric(known_set, CL_PREFIX)
         for it in fetch_changelog_items(s, pages=pages):
-            if it.key in known_set:
-                continue
-            if not allow_backfill and _is_backlog(it, cl_max):
-                print(f"[skip] 更新日志 {it.id} 判为历史积压（已知最新 {cl_max}）")
-                continue
-            out.append(it)
+            if it.key not in known_set:
+                out.append(it)
 
     return out
 
