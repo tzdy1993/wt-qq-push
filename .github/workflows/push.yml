@@ -1,9 +1,10 @@
 name: WT News to QQ
 
 on:
-  schedule:
-    # 每 30 分钟。GitHub 的 cron 用 UTC，这里 :00 和 :30 各触发一次。
-    - cron: "*/30 * * * *"
+  # 定时触发交给外部 cron-job.org 调用这个端点（每 30 分钟）：
+  #   POST https://api.github.com/repos/tzdy1993/wt-qq-push/actions/workflows/push.yml/dispatches
+  # GitHub 原生 schedule 极不稳定（实测 12 小时只触发 2 次，而外部定时器 24 次），
+  # 已停用，避免重复排队浪费 Actions 额度。
   workflow_dispatch:
 
 permissions:
