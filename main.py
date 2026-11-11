@@ -85,6 +85,28 @@ _load_env()
 
 
 # ---------------- state ----------------
+# 屏蔽词：待发布内容命中任意一个就不推（标题、摘要、正文都算）。
+# 用意是避免群里出现敏感表述导致机器人被判违规。命中后直接标记已读，
+# 不会每轮反复重试。想临时调整用环境变量 QQ_BLOCK_WORDS="词1,词2"。
+BLOCK_WORDS = [
+    w.strip()
+    for w in os.environ.get(
+        "QQ_BLOCK_WORDS", "中华民国,中華民國,台湾,臺灣"
+    ).split(",")
+    if w.strip()
+]
+
+
+def find_block_word(text: str) -> str | None:
+    """返回命中的第一个屏蔽词，没命中返回 None。"""
+    if not text:
+        return None
+    for w in BLOCK_WORDS:
+        if w in text:
+            return w
+    return None
+
+
 def load_state() -> dict:
     if STATE_FILE.exists():
         try:
@@ -269,6 +291,16 @@ def run_once(dry_run: bool = False, init: bool = False, pages: int = 2) -> int:
     sent = 0
     for idx, item in enumerate(items):
         text = render_markdown(item) if MODE in ("markdown", "both") else render(item)
+
+        # 屏蔽词检查：命中就不发，并标记已读，避免每轮重复命中
+        hit = find_block_word(text)
+        if hit:
+            print(f"[block] {item.key}《{item.title[:36]}》含屏蔽词「{hit}」，不推送")
+            if not dry_run:
+                state["pushed"].append(item.key)
+                save_state(state)
+            continue
+
         if dry_run:
             print("-" * 60)
             print(f"[mode={MODE}]")
