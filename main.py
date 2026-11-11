@@ -53,9 +53,9 @@ BURST_MAX_ITEMS = int(os.environ.get("QQ_BURST_MAX_ITEMS", "20"))
 # 与官网新闻/更新日志重复的（中文区 94% 是官网内容翻译）通过标题相似度跳过，
 # 剩下的就是官网没有的：分房权重变动、测试服开启、官方爆料、开发进行时等。
 FORUM_ENABLED = os.environ.get("QQ_FORUM", "1").lower() not in ("0", "false", "no")
-# 论坛一天最多几条官方帖，翻 2 页（60 条主题，约 20+ 条官方）足够覆盖一周多。
-# state 里已经记录了历史帖，它们会被 known 集合直接拦掉，不参与标题比对。
-FORUM_PAGES = int(os.environ.get("QQ_FORUM_PAGES", "2"))
+# 论坛走 topics/created-by 接口，每个账号 1 页 = 30 条，两天内绝不会有 30 条
+# 新公告，1 页足够。抓取量小、不受回复顶帖影响。
+FORUM_PAGES = int(os.environ.get("QQ_FORUM_PAGES", "1"))
 
 # 最后一道保险：单次运行最多推这么多条。超出说明不正常（state 丢了、或长期停摆
 # 后积压），此时只推最新的几条，其余静默标记已读，绝不把群刷爆。
@@ -185,8 +185,8 @@ def run_once(dry_run: bool = False, init: bool = False, pages: int = 2) -> int:
     if FORUM_ENABLED:
         try:
             s = _session()
-            # 标题库只取最近 1 页：只有「state 里没有的新帖」才会走到比对，
-            # 而新帖必然是刚发的，对应的官网新闻也就在最近 1 页里。
+            # 标题库取最近 1 页：只有「编号比已知最大更新的」新帖才走到比对，
+            # 而新帖对应的官网新闻必然是最近的，1 页足够。
             dedupe_titles = [i.title for i in fetch_news_items(s, pages=1)]
             dedupe_titles += [i.title for i in fetch_changelog_items(s, pages=1)]
             forum_items, mirror_keys = find_new_forum(
